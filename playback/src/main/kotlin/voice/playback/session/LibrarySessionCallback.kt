@@ -1,6 +1,10 @@
 package voice.playback.session
 
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.util.Log
+import android.view.KeyEvent
 import androidx.datastore.core.DataStore
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -218,5 +222,72 @@ class LibrarySessionCallback
     }
 
     return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+  }
+
+  val TAG = "onMediaButtonEvent"
+  override fun onMediaButtonEvent(session: MediaSession, controllerInfo: ControllerInfo, intent: Intent): Boolean {
+    if (Intent.ACTION_MEDIA_BUTTON != intent.action) {
+      return false;
+    }
+    val keyEvent = if (Build.VERSION.SDK_INT >= 33) {
+      intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
+    } else {
+      @Suppress("DEPRECATION")
+      intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT)
+    }
+    if (keyEvent == null) {
+      return false
+    }
+
+    Log.d(TAG, "==== keyEvent dump: ${keyEventToString(keyEvent)}")
+    // return debounceKeyEvent(keyEvent)
+
+    return super.onMediaButtonEvent(session, controllerInfo, intent)
+  }
+
+  private fun keyEventToString(keyEvent: KeyEvent): String {
+    var action = ""
+    when (keyEvent.action) {
+      KeyEvent.ACTION_UP -> {
+        action = "ACTION_UP"
+      }
+
+      KeyEvent.ACTION_DOWN -> {
+        action = "ACTION_DOWN"
+      }
+    }
+
+    var keyCode = ""
+    when (keyEvent.keyCode) {
+      KeyEvent.KEYCODE_HEADSETHOOK -> {
+        keyCode = "KEYCODE_HEADSETHOOK"
+      }
+
+      KeyEvent.KEYCODE_MEDIA_PLAY -> {
+        keyCode = "KEYCODE_MEDIA_PLAY"
+      }
+
+      KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+        keyCode = "KEYCODE_MEDIA_PAUSE"
+      }
+
+      KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+        keyCode = "KEYCODE_MEDIA_PLAY_PAUSE"
+      }
+
+      KeyEvent.KEYCODE_MEDIA_NEXT -> {
+        keyCode = "KEYCODE_MEDIA_NEXT"
+      }
+
+      KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+        keyCode = "KEYCODE_MEDIA_PREVIOUS"
+      }
+
+      KeyEvent.KEYCODE_MEDIA_STOP -> {
+        keyCode = "KEYCODE_MEDIA_STOP"
+      }
+    }
+
+    return "keyCode=$keyCode, action=$action, repeatCount=${keyEvent.repeatCount}"
   }
 }
