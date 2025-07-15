@@ -39,6 +39,7 @@ import voice.playback.session.search.BookSearchHandler
 import voice.playback.session.search.BookSearchParser
 import javax.inject.Inject
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
 
 class LibrarySessionCallback
 @Inject constructor(
@@ -260,6 +261,10 @@ class LibrarySessionCallback
   // 1100 for Pixel 4a
   val longerDelay = 1100.milliseconds
 
+  // repeated events on buttonHold are sent with about 50ms delay
+  // to detect a holdEnded, the delay has to be slightly higher than this delay
+  val holdEndedDelay = 100.milliseconds
+
   var clickCount = 0
 
   // state store before handling the action - wasPlaying=true means that the player was not paused
@@ -353,7 +358,7 @@ class LibrarySessionCallback
       }
       buttonHoldEndedJob = scope.launch {
         log("clickPressedJob: scheduled")
-        delay(timerDelay)
+        delay(holdEndedDelay)
         log("clickPressedJob: execute")
         clickCount = 0
         if(wasPlaying) {
@@ -390,17 +395,15 @@ class LibrarySessionCallback
     when(clickCount) {
       0 -> {
         log("playerAction - clickPressed: seekback")
-        player.seekBack()
+        player.stepBack()
       }
       1 -> {
         log("playerAction - clickPressed: fastForward")
-        // todo: implement fastForward
-        player.seekForward()
+        player.fastForward()
       }
       2 -> {
         log("playerAction - clickPressed: rewind")
-        // todo: implement rewind
-        player.seekBack()
+        player.rewind()
       }
     }
   }
@@ -421,12 +424,14 @@ class LibrarySessionCallback
 
         2 -> {
           log("playerAction - clickReleased: next")
-          player.seekToNextMediaItem()
+          // player.forceSeekToNext() // this will seek to next chapter
+          player.seekForward(5.minutes)
         }
 
         3 -> {
           log("playerAction - clickReleased: previous")
-          player.seekToPreviousMediaItem()
+          // player.forceSeekToPrevious()
+          player.seekBack(5.minutes)
         }
     }
 

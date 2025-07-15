@@ -7,6 +7,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -26,6 +28,7 @@ import voice.playback.session.MediaItemProvider
 import voice.playback.session.toMediaIdOrNull
 import java.time.Instant
 import javax.inject.Inject
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.ZERO
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -46,7 +49,11 @@ class VoicePlayer
   private val volumeGain: VolumeGain,
 ) : ForwardingPlayer(player) {
 
+  val seekPlayBufferTime = 850.milliseconds
+  var seekJob : Job? = null
+
   fun forceSeekToNext() {
+    seekJob?.cancel()
     scope.launch {
       val currentMediaItem = player.currentMediaItem ?: return@launch
       val marks = currentMediaItem.chapter()?.chapterMarks ?: return@launch
@@ -69,6 +76,7 @@ class VoicePlayer
   }
 
   fun forceSeekToPrevious() {
+    seekJob?.cancel()
     scope.launch {
       val currentMediaItem = player.currentMediaItem ?: return@launch
       val marks = currentMediaItem.chapter()?.chapterMarks ?: return@launch
@@ -137,56 +145,115 @@ class VoicePlayer
   }
 
   override fun seekBack() {
+    seekJob?.cancel()
     scope.launch {
       val skipAmount = seekTimeStore.data.first().seconds
+      suspendSeekBack(skipAmount)
+    }
+  }
 
-      val currentPosition = player.currentPosition.takeUnless { it == C.TIME_UNSET }
-        ?.milliseconds
-        ?.coerceAtLeast(ZERO)
-        ?: return@launch
+  fun seekBack(skipAmount: Duration) {
+    seekJob?.cancel()
+    scope.launch {
+      suspendSeekBack(skipAmount)
+    }
+  }
 
-      val newPosition = currentPosition - skipAmount
-      if (newPosition < ZERO) {
-        val previousMediaItemIndex = previousMediaItemIndex.takeUnless { it == C.INDEX_UNSET }
-        if (previousMediaItemIndex == null) {
-          player.seekTo(0)
-        } else {
-          val previousMediaItem = player.getMediaItemAt(previousMediaItemIndex)
-          val chapter = previousMediaItem.chapter() ?: return@launch
-          val previousMediaItemDuration = chapter.duration.milliseconds
-          player.seekTo(previousMediaItemIndex, (previousMediaItemDuration - newPosition.absoluteValue).inWholeMilliseconds)
-        }
+  suspend fun suspendSeekBack(skipAmount: Duration) {
+    val currentPosition = player.currentPosition.takeUnless { it == C.TIME_UNSET }
+      ?.milliseconds
+      ?.coerceAtLeast(ZERO)
+      ?: return
+
+    val newPosition = currentPosition - skipAmount
+    if (newPosition < ZERO) {
+      val previousMediaItemIndex = previousMediaItemIndex.takeUnless { it == C.INDEX_UNSET }
+      if (previousMediaItemIndex == null) {
+        player.seekTo(0)
       } else {
-        player.seekTo(newPosition.inWholeMilliseconds)
+        val previousMediaItem = player.getMediaItemAt(previousMediaItemIndex)
+        val chapter = previousMediaItem.chapter() ?: return
+        val previousMediaItemDuration = chapter.duration.milliseconds
+        player.seekTo(previousMediaItemIndex, (previousMediaItemDuration - newPosition.absoluteValue).inWholeMilliseconds)
       }
+    } else {
+      player.seekTo(newPosition.inWholeMilliseconds)
     }
   }
 
   override fun seekForward() {
+    seekJob?.cancel()
     scope.launch {
       val skipAmount = seekTimeStore.data.first().seconds
+      seekForward(skipAmount)
+    }
+  }
+  fun seekForward(skipAmount: Duration) {
+    val currentPosition = player.currentPosition.takeUnless { it == C.TIME_UNSET }
+      ?.milliseconds
+      ?.coerceAtLeast(ZERO)
+      ?: return
+    val newPosition = currentPosition + skipAmount
 
-      val currentPosition = player.currentPosition.takeUnless { it == C.TIME_UNSET }
-        ?.milliseconds
-        ?.coerceAtLeast(ZERO)
-        ?: return@launch
-      val newPosition = currentPosition + skipAmount
+    val duration = player.duration.takeUnless { it == C.TIME_UNSET }
+      ?.milliseconds
+      ?: return
 
-      val duration = player.duration.takeUnless { it == C.TIME_UNSET }
-        ?.milliseconds
-        ?: return@launch
+    if (newPosition > duration) {
+      val nextMediaItemIndex = nextMediaItemIndex.takeUnless { it == C.INDEX_UNSET }
+        ?: return
+      player.seekTo(nextMediaItemIndex, (duration - newPosition).absoluteValue.inWholeMilliseconds)
+    } else {
+      player.seekTo(newPosition.inWholeMilliseconds)
+    }
+  }
 
-      if (newPosition > duration) {
-        val nextMediaItemIndex = nextMediaItemIndex.takeUnless { it == C.INDEX_UNSET }
-          ?: return@launch
-        player.seekTo(nextMediaItemIndex, (duration - newPosition).absoluteValue.inWholeMilliseconds)
+  fun fastForward() {
+    seekJob?.cancel()
+    seekJob = scope.launch {
+      val isPlaying = player.isPlaying
+      while(player.currentPosition < player.duration) {
+        seekForward(10.seconds - seekPlayBufferTime)
+        playWithoutCancel()
+        delay(seekPlayBufferTime)
+      }
+      if(isPlaying) {
+        play()
       } else {
-        player.seekTo(newPosition.inWholeMilliseconds)
+        pause()
       }
     }
   }
 
+  fun rewind() {
+    seekJob?.cancel()
+    seekJob = scope.launch {
+      val isPlaying = player.isPlaying
+      while(player.currentPosition > 0) {
+        suspendSeekBack(10.seconds + seekPlayBufferTime)
+        playWithoutCancel()
+        delay(seekPlayBufferTime)
+      }
+      if(isPlaying) {
+        play()
+      } else {
+        pause()
+      }
+    }
+  }
+
+  fun stepBack() {
+    seekJob?.cancel()
+    scope.launch {
+      suspendSeekBack(30.seconds)
+    }
+  }
+
   override fun play() {
+    seekJob?.cancel()
+    playWithoutCancel()
+  }
+  fun playWithoutCancel() {
     playWhenReady = true
   }
 
@@ -209,6 +276,7 @@ class VoicePlayer
   }
 
   override fun pause() {
+    seekJob?.cancel()
     playWhenReady = false
   }
 
@@ -321,6 +389,7 @@ class VoicePlayer
   }
 
   private suspend fun updateBook(update: (BookContent) -> BookContent) {
+    seekJob?.cancel()
     val bookId = currentBookStoreId.data.first() ?: return
     repo.updateBook(bookId, update)
   }
