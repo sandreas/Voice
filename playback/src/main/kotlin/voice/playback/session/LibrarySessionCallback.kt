@@ -23,6 +23,8 @@ import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.guava.await
 import kotlinx.coroutines.guava.future
@@ -36,6 +38,7 @@ import voice.playback.player.VoicePlayer
 import voice.playback.session.search.BookSearchHandler
 import voice.playback.session.search.BookSearchParser
 import javax.inject.Inject
+import kotlin.time.Duration.Companion.milliseconds
 
 class LibrarySessionCallback
 @Inject constructor(
@@ -224,7 +227,6 @@ class LibrarySessionCallback
     return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
   }
 
-  val TAG = "onMediaButtonEvent"
   override fun onMediaButtonEvent(session: MediaSession, controllerInfo: ControllerInfo, intent: Intent): Boolean {
     if (Intent.ACTION_MEDIA_BUTTON != intent.action) {
       return false;
@@ -239,55 +241,195 @@ class LibrarySessionCallback
       return false
     }
 
-    Log.d(TAG, "==== keyEvent dump: ${keyEventToString(keyEvent)}")
-    // return debounceKeyEvent(keyEvent)
-
-    return super.onMediaButtonEvent(session, controllerInfo, intent)
+    log("keyEvent dump: ${keyEventToString(keyEvent)}")
+    if (keyEvent.action == KeyEvent.ACTION_DOWN) {
+      return debounceKeyEvent(keyEvent)
+    }
+    return true
   }
 
+
+  // on some devices / Android versions long press events are being "collected" for a timespan of 1000ms,
+  // so holding the button down does not fire any events for at least 1000ms. Therefore, after releasing
+  // you have to wait at least 1050ms to ensure no long press is being performed
+  // some devices have shorter delays
+
+  // 650 for unihertz jelly 2e
+  val shortDelay = 650.milliseconds
+
+  // 1100 for Pixel 4a
+  val longerDelay = 1100.milliseconds
+
+  var clickCount = 0
+
+  // state store before handling the action - wasPlaying=true means that the player was not paused
+  var wasPlaying = false
+  // job that performs an action after buttonHold has ended
+  var buttonHoldEndedJob: Job? = null
+
+  // job that gets executed after button has been released without buttonHold
+  var buttonReleasedJob: Job? = null
+
+  private fun log(message:String) {
+    Log.d(
+      "onMediaButtonEvent",
+      "==== $message"
+    )
+  }
   private fun keyEventToString(keyEvent: KeyEvent): String {
-    var action = ""
-    when (keyEvent.action) {
-      KeyEvent.ACTION_UP -> {
-        action = "ACTION_UP"
-      }
-
-      KeyEvent.ACTION_DOWN -> {
-        action = "ACTION_DOWN"
-      }
+    val action = when (keyEvent.action) {
+      KeyEvent.ACTION_UP -> "ACTION_UP"
+      KeyEvent.ACTION_DOWN -> "ACTION_DOWN"
+      else -> "ACTION_UNKNOWN"
     }
-
-    var keyCode = ""
-    when (keyEvent.keyCode) {
-      KeyEvent.KEYCODE_HEADSETHOOK -> {
-        keyCode = "KEYCODE_HEADSETHOOK"
-      }
-
-      KeyEvent.KEYCODE_MEDIA_PLAY -> {
-        keyCode = "KEYCODE_MEDIA_PLAY"
-      }
-
-      KeyEvent.KEYCODE_MEDIA_PAUSE -> {
-        keyCode = "KEYCODE_MEDIA_PAUSE"
-      }
-
-      KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-        keyCode = "KEYCODE_MEDIA_PLAY_PAUSE"
-      }
-
-      KeyEvent.KEYCODE_MEDIA_NEXT -> {
-        keyCode = "KEYCODE_MEDIA_NEXT"
-      }
-
-      KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
-        keyCode = "KEYCODE_MEDIA_PREVIOUS"
-      }
-
-      KeyEvent.KEYCODE_MEDIA_STOP -> {
-        keyCode = "KEYCODE_MEDIA_STOP"
-      }
+    val keyCode = when (keyEvent.keyCode) {
+      KeyEvent.KEYCODE_HEADSETHOOK -> "KEYCODE_HEADSETHOOK"
+      KeyEvent.KEYCODE_MEDIA_PLAY -> "KEYCODE_MEDIA_PLAY"
+      KeyEvent.KEYCODE_MEDIA_PAUSE -> "KEYCODE_MEDIA_PAUSE"
+      KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> "KEYCODE_MEDIA_PLAY_PAUSE"
+      KeyEvent.KEYCODE_MEDIA_NEXT -> "KEYCODE_MEDIA_NEXT"
+      KeyEvent.KEYCODE_MEDIA_PREVIOUS -> "KEYCODE_MEDIA_PREVIOUS"
+      KeyEvent.KEYCODE_MEDIA_STOP -> "KEYCODE_MEDIA_STOP"
+      else -> "KEYCODE_UNKNOWN"
     }
-
     return "keyCode=$keyCode, action=$action, repeatCount=${keyEvent.repeatCount}"
+  }
+
+  private fun debounceKeyEvent(keyEvent: KeyEvent): Boolean {
+    log("debounceKeyEvent: ${keyEventToString(keyEvent)}, clickCount=$clickCount, repeatCount=${keyEvent.repeatCount}")
+
+    // this is device dependant
+    // - longerDelay is less responsive but secure for all devices
+    // - shortDelay is what we want, but most devices just don't support it
+
+    val timerDelay = longerDelay
+    val clickPressed = keyEvent.repeatCount > 0
+
+    // only increase the clickCount on non-clickPressed events
+    if(!clickPressed) {
+      when (keyEvent.keyCode) {
+        KeyEvent.KEYCODE_HEADSETHOOK,
+        KeyEvent.KEYCODE_MEDIA_PLAY,
+        KeyEvent.KEYCODE_MEDIA_PAUSE,
+        KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+          clickCount++
+          log("handleCallMediaButton: Headset Hook/Play/ Pause, clickCount=$clickCount")
+        }
+
+        KeyEvent.KEYCODE_MEDIA_NEXT -> {
+          clickCount += 2
+          log("handleCallMediaButton: Media Next, clickCount=$clickCount")
+        }
+
+        KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+          clickCount += 3
+          log("handleCallMediaButton: Media Previous, clickCount=$clickCount")
+        }
+
+        KeyEvent.KEYCODE_MEDIA_STOP -> {
+          log("handleCallMediaButton: Media Stop, clickCount=$clickCount")
+          player.stop()
+          buttonReleasedJob?.cancel()
+          clickCount = 0
+          return true
+        }
+
+        else -> {
+          log("Unhandled KeyEvent: ${keyEvent.keyCode}, clickCount=$clickCount")
+          return false
+        }
+      }
+    }
+
+    // cancel all running jobs on a new click
+    buttonReleasedJob?.cancel()
+    buttonHoldEndedJob?.cancel()
+
+    if(clickPressed) {
+      // only handle first repeatedEvent
+      if(keyEvent.repeatCount < 3) {
+        wasPlaying = player.isPlaying
+        handleClickPressed(clickCount)
+      }
+      buttonHoldEndedJob = scope.launch {
+        log("clickPressedJob: scheduled")
+        delay(timerDelay)
+        log("clickPressedJob: execute")
+        clickCount = 0
+        if(wasPlaying) {
+          log("playerAction - holdEnded: play")
+          player.play()
+        } else {
+          log("playerAction - holdEnded: pause")
+          player.pause()
+        }
+      }
+    } else {
+      wasPlaying = player.isPlaying
+      buttonReleasedJob = scope.launch {
+        // delay(650);
+        log("clickReleasedJob scheduled: delay=${timerDelay.inWholeMilliseconds}ms, clicks=$clickCount, hold=$clickPressed ==== ${
+            keyEventToString(keyEvent)
+          }"
+        )
+        delay(timerDelay)
+        log("clickReleasedJob executed: delay=${timerDelay.inWholeMilliseconds}ms, clicks=$clickCount, hold=$clickPressed ==== ${
+          keyEventToString(keyEvent)
+        }")
+        handleClicksReleased(clickCount)
+        clickCount = 0
+      }
+    }
+
+    return true
+  }
+
+  private fun handleClickPressed(clickCount: Int) {
+
+    log("handleClickPressed: count=$clickCount")
+    when(clickCount) {
+      0 -> {
+        log("playerAction - clickPressed: seekback")
+        player.seekBack()
+      }
+      1 -> {
+        log("playerAction - clickPressed: fastForward")
+        // todo: implement fastForward
+        player.seekForward()
+      }
+      2 -> {
+        log("playerAction - clickPressed: rewind")
+        // todo: implement rewind
+        player.seekBack()
+      }
+    }
+  }
+
+  fun handleClicksReleased(clickCount: Int) {
+    log("handleClickReleased: count=$clickCount")
+
+      when (clickCount) {
+        1 -> {
+          if (player.isPlaying) {
+            log("playerAction - clickReleased: pause")
+            player.pause()
+          } else {
+            log("playerAction - clickReleased: play")
+            player.play()
+          }
+        }
+
+        2 -> {
+          log("playerAction - clickReleased: next")
+          player.seekToNextMediaItem()
+        }
+
+        3 -> {
+          log("playerAction - clickReleased: previous")
+          player.seekToPreviousMediaItem()
+        }
+    }
+
+
   }
 }
