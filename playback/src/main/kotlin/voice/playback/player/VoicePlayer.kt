@@ -52,8 +52,10 @@ class VoicePlayer
   val seekPlayBufferTime = 850.milliseconds
   var seekJob : Job? = null
 
+  var isSeeking = false
+
   fun forceSeekToNext() {
-    seekJob?.cancel()
+    cancelSeekJob()
     scope.launch {
       val currentMediaItem = player.currentMediaItem ?: return@launch
       val marks = currentMediaItem.chapter()?.chapterMarks ?: return@launch
@@ -76,7 +78,7 @@ class VoicePlayer
   }
 
   fun forceSeekToPrevious() {
-    seekJob?.cancel()
+    cancelSeekJob()
     scope.launch {
       val currentMediaItem = player.currentMediaItem ?: return@launch
       val marks = currentMediaItem.chapter()?.chapterMarks ?: return@launch
@@ -145,7 +147,7 @@ class VoicePlayer
   }
 
   override fun seekBack() {
-    seekJob?.cancel()
+    cancelSeekJob()
     scope.launch {
       val skipAmount = seekTimeStore.data.first().seconds
       suspendSeekBack(skipAmount)
@@ -153,7 +155,7 @@ class VoicePlayer
   }
 
   fun seekBack(skipAmount: Duration) {
-    seekJob?.cancel()
+    cancelSeekJob()
     scope.launch {
       suspendSeekBack(skipAmount)
     }
@@ -182,13 +184,15 @@ class VoicePlayer
   }
 
   override fun seekForward() {
-    seekJob?.cancel()
+    cancelSeekJob()
     scope.launch {
       val skipAmount = seekTimeStore.data.first().seconds
       seekForward(skipAmount)
     }
   }
   fun seekForward(skipAmount: Duration) {
+    cancelSeekJob()
+
     val currentPosition = player.currentPosition.takeUnless { it == C.TIME_UNSET }
       ?.milliseconds
       ?.coerceAtLeast(ZERO)
@@ -209,14 +213,16 @@ class VoicePlayer
   }
 
   fun fastForward() {
-    seekJob?.cancel()
+    cancelSeekJob()
     seekJob = scope.launch {
+      isSeeking = true
       val isPlaying = player.isPlaying
       while(player.currentPosition < player.duration) {
         seekForward(10.seconds - seekPlayBufferTime)
         playWithoutCancel()
         delay(seekPlayBufferTime)
       }
+      isSeeking = false
       if(isPlaying) {
         play()
       } else {
@@ -226,14 +232,16 @@ class VoicePlayer
   }
 
   fun rewind() {
-    seekJob?.cancel()
+    cancelSeekJob()
     seekJob = scope.launch {
       val isPlaying = player.isPlaying
+      isSeeking = true
       while(player.currentPosition > 0) {
         suspendSeekBack(10.seconds + seekPlayBufferTime)
         playWithoutCancel()
         delay(seekPlayBufferTime)
       }
+      isSeeking = false
       if(isPlaying) {
         play()
       } else {
@@ -243,14 +251,19 @@ class VoicePlayer
   }
 
   fun stepBack() {
-    seekJob?.cancel()
+    cancelSeekJob()
     scope.launch {
       suspendSeekBack(30.seconds)
     }
   }
 
-  override fun play() {
+  private fun cancelSeekJob() {
     seekJob?.cancel()
+    isSeeking = false
+  }
+
+  override fun play() {
+    cancelSeekJob()
     playWithoutCancel()
   }
   fun playWithoutCancel() {
@@ -276,7 +289,7 @@ class VoicePlayer
   }
 
   override fun pause() {
-    seekJob?.cancel()
+    cancelSeekJob()
     playWhenReady = false
   }
 
@@ -389,7 +402,7 @@ class VoicePlayer
   }
 
   private suspend fun updateBook(update: (BookContent) -> BookContent) {
-    seekJob?.cancel()
+    cancelSeekJob()
     val bookId = currentBookStoreId.data.first() ?: return
     repo.updateBook(bookId, update)
   }

@@ -419,7 +419,14 @@ class LibrarySessionCallback
 
       when (clickCount) {
         1 -> {
-          if (player.isPlaying) {
+          if(player.isSeeking) {
+            log("playerAction - clickReleased: seeking restoreStatus")
+            if(wasPlaying) {
+              player.play()
+            } else {
+              player.pause()
+            }
+          } else if (player.isPlaying) {
             log("playerAction - clickReleased: pause")
             player.pause()
           } else {
@@ -442,6 +449,10 @@ class LibrarySessionCallback
         4 -> {
           log("playerAction - clickReleased: stepBack")
           player.stepBack()
+        }
+        5 -> {
+          log("playerAction - clickReleased: rewind")
+          player.rewind()
         }
     }
 
