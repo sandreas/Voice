@@ -216,6 +216,12 @@ class LibrarySessionCallback
       CustomCommand.ForceSeekToPrevious -> {
         player.forceSeekToPrevious()
       }
+      CustomCommand.FastForward -> {
+        player.fastForward()
+      }
+      CustomCommand.Rewind -> {
+        player.rewind()
+      }
 
       is CustomCommand.SetSkipSilence -> {
         player.setSkipSilenceEnabled(command.skipSilence)
@@ -432,6 +438,10 @@ class LibrarySessionCallback
           log("playerAction - clickReleased: previous")
           // player.forceSeekToPrevious()
           player.seekBack(5.minutes)
+        }
+        4 -> {
+          log("playerAction - clickReleased: stepBack")
+          player.stepBack()
         }
     }
 

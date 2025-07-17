@@ -17,6 +17,12 @@ internal sealed interface CustomCommand {
   data object ForceSeekToPrevious : CustomCommand
 
   @Serializable
+  data object FastForward : CustomCommand
+
+  @Serializable
+  data object Rewind : CustomCommand
+
+  @Serializable
   data class SetSkipSilence(val skipSilence: Boolean) : CustomCommand
 
   @Serializable

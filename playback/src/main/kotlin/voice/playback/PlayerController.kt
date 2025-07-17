@@ -86,11 +86,13 @@ class PlayerController
   }
 
   fun fastForward() = executeAfterPrepare { controller ->
-    controller.seekForward()
+    // controller.seekForward
+    controller.sendCustomCommand(CustomCommand.FastForward)
   }
 
   fun rewind() = executeAfterPrepare { controller ->
-    controller.seekBack()
+    // controller.seekBack()
+    controller.sendCustomCommand(CustomCommand.Rewind)
   }
 
   fun previous() = executeAfterPrepare { controller ->

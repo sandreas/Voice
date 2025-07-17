@@ -42,12 +42,12 @@ class WidgetButtonReceiver : BroadcastReceiver() {
             Action.PlayPause -> player.playPause()
             Action.FastForward -> {
               player.fastForward()
-              player.play()
+              // player.play()
             }
 
             Action.Rewind -> {
               player.rewind()
-              player.play()
+              // player.play()
             }
           }
         }
